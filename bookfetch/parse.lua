@@ -106,7 +106,10 @@ function M.search(html)
                     or c.attrs:find('search%?q=') and class:find('italic',1,true)) then book.author=M.text(text(c)) end
                 if c.tag=='span' and c.attrs:find('mdi%-%-user%-edit') then
                     local a=c.parent
-                    while a and a~=card and a.tag~='a' do a=a.parent end
+                    for _=1,12 do
+                        if not a or a==card or a.tag=='a' then break end
+                        a=a.parent
+                    end
                     if a and a.tag=='a' then book.author=M.text(text(a)) end
                 end
                 if class:find('publisher',1,true) or class:find('text%-xs') then
@@ -117,12 +120,63 @@ function M.search(html)
                     book.author=M.text(text(c))
                 end
             end)
-            local meta=M.text(text(card))
-            book.language=meta:match('%[([%a%-]+)%]')
-            book.year=meta:match('%f[%d]([12]%d%d%d)%f[^%d]')
-            book.size=meta:match('(%d+%.?%d*%s*[KMG][Bb])')
-            for token in meta:lower():gmatch('%f[%w]([%a][%w]*)%f[^%w]') do
-                if formats[token] then book.format=token; break end
+            -- Metadata is confined to its own element or one direct text line.
+            -- Titles and author/publisher descendants must never supply format/year.
+            local metadata={}
+            local function excluded(c)
+                if c.tag:match('^h[1-6]$') then return true end
+                local parent=c
+                for _=1,12 do
+                    if not parent or parent==card then break end
+                    if parent.tag=='a' then return true end
+                    parent=parent.parent
+                end
+                if parent and parent~=card then return true end
+                local class=M.attribute(c.attrs,'class') or ''
+                return class:find('author',1,true) or class:find('publisher',1,true)
+            end
+            walk(card,function(c)
+                if excluded(c) then return end
+                local class=M.attribute(c.attrs,'class') or ''
+                local format=M.attribute(c.attrs,'data-format')
+                if format and formats[format:lower()] then book.format=book.format or format:lower() end
+                local year=M.attribute(c.attrs,'data-year')
+                if year and year:match('^[12]%d%d%d$') then book.year=book.year or year end
+                local language=M.attribute(c.attrs,'data-language')
+                if language and #language<=16 and language:match('^[%a%-]+$') then book.language=book.language or language end
+                local size=M.attribute(c.attrs,'data-size')
+                if size and #size<=32 then book.size=book.size or size end
+                local line=M.text(text(c)):sub(1,2048)
+                local linked=false
+                walk(c,function(child)
+                    local href=child.tag=='a' and M.attribute(child.attrs,'href') or ''
+                    if href:match('^/md5/') then linked=true end
+                end)
+                if not linked and (class:find('metadata',1,true) or class:find('text%-sm')
+                    and (line:find('·',1,true) or line:find('%[[%a%-]+%]'))) then
+                    metadata[#metadata+1]=line
+                end
+            end)
+            if #metadata==0 then
+                walk(card,function(c)
+                    if not excluded(c) then
+                        for _,child in ipairs(c.children) do
+                            if type(child)=='string' then
+                                for line in child:gmatch('[^\r\n]+') do
+                                    if line:find('·',1,true) then metadata[#metadata+1]=M.text(line):sub(1,2048) end
+                                end
+                            end
+                        end
+                    end
+                end)
+            end
+            for _,meta in ipairs(metadata) do
+                book.language=book.language or meta:match('%[([%a%-]+)%]')
+                book.year=book.year or meta:match('%f[%d]([12]%d%d%d)%f[^%d]')
+                book.size=book.size or meta:match('(%d+%.?%d*%s*[KMG][Bb])')
+                for token in meta:lower():gmatch('%f[%w]([%a][%w]*)%f[^%w]') do
+                    if formats[token] then book.format=book.format or token; break end
+                end
             end
             if book.title~='Cover' then results[#results+1]=book; seen[link.md5]=true end
         end
@@ -141,10 +195,23 @@ function M.libgen(html, expected)
 end
 function M.blocked(code,headers,body)
     local loc=(headers or {}).location or ''
-    local cookie=(headers or {})['set-cookie'] or ''
     local h=(body or ''):lower()
-    return ((code==302 or code==307 or code==303) and loc:find('check=1',1,true)~=nil)
-        or cookie:lower():find('__ddg',1,true)~=nil or h:find('ddos-guard',1,true)~=nil
+    return code==403 or ((code==302 or code==307 or code==303) and loc:find('check=1',1,true)~=nil)
+        or h:find('ddos-guard',1,true)~=nil
+end
+function M.sniff(prefix,content_type)
+    prefix=prefix or ''
+    local t=(content_type or ''):lower():match('^[^;]+') or ''
+    if prefix:sub(1,4)=='%PDF' then return 'pdf' end
+    if prefix:sub(61,68)=='BOOKMOBI' then return 'mobi' end
+    if prefix:sub(1,8)=='AT&TFORM' then return 'djvu' end
+    if prefix:find('<FictionBook[%s>]') or prefix:find('<FictionBook/') then return 'fb2' end
+    if prefix:sub(1,4)=='PK\3\4' then
+        if prefix:find('application/epub+zip',1,true) or t=='application/epub+zip' then return 'epub' end
+        if prefix:find('word/',1,true) or t=='application/vnd.openxmlformats-officedocument.wordprocessingml.document' then return 'docx' end
+        if t=='application/vnd.comicbook+zip' or t=='application/x-cbz' then return 'cbz' end
+    end
+    if t=='text/plain' and not prefix:find('\0',1,true) then return 'txt' end
 end
 function M.magic(prefix,format,content_type)
     local t=(content_type or ''):lower()
