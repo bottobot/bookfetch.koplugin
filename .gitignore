@@ -1,0 +1,8 @@
+*.part
+*.part.md5
+*.bad
+*.bad.*
+*.tmp
+*.log
+settings/
+bookfetch-test/
