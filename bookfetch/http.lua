@@ -94,6 +94,17 @@ function M.body_source(sock,headers)
     local chunked=transfer=='chunked'
     local remaining=chunked and 0 or length
     local ended,pending_error,separator=false,nil,false
+    local function line(label)
+        local chars={}
+        -- Numeric one-byte receives cap allocation even for an unterminated line.
+        for i=1,8192 do
+            local c,err=sock:receive(1)
+            if not c then return nil,err or 'Incomplete '..label end
+            if c=='\n' then return table.concat(chars):gsub('\r$','') end
+            chars[i]=c
+        end
+        return nil,label..' too large'
+    end
     local function receive(n,closing_allowed)
         local chunk,err,partial=sock:receive(n)
         if chunk then return chunk end
@@ -113,20 +124,19 @@ function M.body_source(sock,headers)
                     local crlf,err=sock:receive(2)
                     if crlf~='\r\n' then return nil,err or 'Invalid chunk separator' end
                 end
-                local line,err=sock:receive('*l')
-                if not line then return nil,err end
-                if #line>8192 then return nil,'Chunk header too large' end
-                local size=line:match('^%s*(%x+)%s*;?.*$')
+                local header,err=line('Chunk header')
+                if not header then return nil,err end
+                local size=header:match('^%s*(%x+)%s*;?.*$')
                 remaining=tonumber(size,16)
                 if not remaining then return nil,'Invalid chunk length' end
                 if remaining==0 then
                     local total=0
                     repeat
-                        line,err=sock:receive('*l')
-                        if not line then return nil,err end
-                        total=total+#line
+                        header,err=line('Trailer')
+                        if not header then return nil,err end
+                        total=total+#header+2
                         if total>65536 then return nil,'Trailers too large' end
-                    until line==''
+                    until header==''
                     ended=true; return nil
                 end
                 separator=true
@@ -169,7 +179,7 @@ function Client:once(url,opts)
         old_block,old_total=socketutil.block_timeout,socketutil.total_timeout
         socketutil:set_timeout(15,-1)
     else socket_http.TIMEOUT,https.TIMEOUT=15,15 end
-    local conn, sink_error
+    local conn, sink_error,connected
     local function perform()
         local factory=https.tcp{verify='peer',cafile=self.cafile,protocol='any',
             options={'all','no_sslv2','no_sslv3','no_tlsv1','no_tlsv1_1'}}
@@ -202,6 +212,7 @@ function Client:once(url,opts)
         if opts.body then conn:sendbody(headers,ltn12.source.string(opts.body)) end
         local code,status=conn:receivestatusline()
         assert(code,'Invalid HTTP status')
+        connected=true
         local response_headers=conn:receiveheaders()
         local interim=0
         while code>=100 and code<200 do
@@ -245,7 +256,7 @@ function Client:once(url,opts)
     socket_http.TIMEOUT,https.TIMEOUT=old_http,old_https
     if not ok then
         local problem=type(res)=='table' and res[1] or res
-        return nil,M.redact(sink_error or problem,self.secret),sink_error and 'response' or 'transport'
+        return nil,M.redact(sink_error or problem,self.secret),sink_error and 'response' or connected and 'body' or 'transport'
     end
     return res,why,kind
 end
@@ -253,15 +264,20 @@ function Client:request(url,opts)
     opts=opts or {}
     local current=url
     local first,err=M.url(url)
-    if not first then return nil,err end
+    if not first then return nil,err,'policy' end
     local headers={}; for k,v in pairs(opts.headers or {}) do headers[k]=v end
     local method,body=opts.method,opts.body
     for hop=0,8 do
         local parsed,why=M.url(current)
-        if not parsed then return nil,why end
-        if opts.same_origin and parsed.origin~=first.origin then return nil,'Cross-origin account redirect refused' end
+        if not parsed then return nil,why,'policy' end
+        if opts.same_origin and parsed.origin~=first.origin then return nil,'Cross-origin account redirect refused','policy' end
+        if opts.origin_policy then
+            local allowed,issue=opts.origin_policy(parsed)
+            if not allowed then return nil,issue or 'Origin policy refused '..parsed.host,'policy' end
+        end
         local bad=self:bad(parsed.host)
-        if bad then return nil,'Skipped '..parsed.host..' ('..bad..')' end
+        if bad then return nil,'Skipped '..parsed.host..' ('..bad..')','transport' end
+        if opts.cookie_jar then headers.cookie=opts.cookie_jar:header(current) end
         if self.on_host then self.on_host(parsed.host) end
         local request_opts={headers=headers,method=method,body=body,sink_factory=opts.sink_factory,max_body=opts.max_body}
         local res,problem,kind=self:once(current,request_opts)
@@ -273,9 +289,10 @@ function Client:request(url,opts)
             end
             return nil,M.redact('Request failed on '..parsed.host..' ('..reason..')',self.secret),kind
         end
+        if opts.cookie_jar then opts.cookie_jar:update(current,res.headers['set-cookie']) end
         if opts.inspect then
             local accepted,issue=opts.inspect(res)
-            if not accepted then return nil,issue end
+            if not accepted then return nil,issue,'response' end
         end
         if res.code==301 or res.code==302 or res.code==303 or res.code==307 or res.code==308 then
             if hop==8 then return nil,'Too many redirects on '..parsed.host end

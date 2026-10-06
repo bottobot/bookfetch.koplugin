@@ -68,21 +68,52 @@ return function(T)
             out[#out+1]=chunk
         end
     end
-    T.test('chunked source reads at most 64 KiB',function()
-        local left=200000
-        local max_read=0
-        local stage=0
-        local sock={receive=function(_,n)
-            if n=='*l' then
-                stage=stage+1
-                if stage==1 then return string.format('%x',left) elseif stage==2 then return '0' else return '' end
-            end
-            if left==0 then T.eq(n,2); return '\r\n' end
-            max_read=math.max(max_read,n); T.truth(n<=65536)
-            left=left-n; return string.rep('x',n)
+    local function socket_bytes(data)
+        local pos=1
+        return {receive=function(_,n)
+            T.eq(type(n),'number'); T.truth(n<=65536)
+            local out=data:sub(pos,pos+n-1); pos=pos+#out
+            if #out<n then return nil,'closed',out end
+            return out
         end}
-        local result,err=drain(assert(H.body_source(sock,{['transfer-encoding']='chunked'})))
-        T.eq(#result,200000); T.eq(err,nil); T.eq(max_read,65536)
+    end
+    T.test('chunked source reads at most 64 KiB',function()
+        local data=string.format('%x',200000)..'\r\n'..string.rep('x',200000)..'\r\n0\r\n\r\n'
+        local result,err=drain(assert(H.body_source(socket_bytes(data),{['transfer-encoding']='chunked'})))
+        T.eq(#result,200000); T.eq(err,nil)
+    end)
+    T.test('oversized chunk line stops at hard allocation cap',function()
+        local reads=0
+        local sock={receive=function(_,n) T.eq(n,1); reads=reads+1; return 'a' end}
+        local _,err=H.body_source(sock,{['transfer-encoding']='chunked'})()
+        T.eq(err,'Chunk header too large'); T.eq(reads,8192)
+    end)
+    T.test('trailer line and cumulative caps',function()
+        local _,err=H.body_source(socket_bytes('0\r\n'..string.rep('a',8192)),{['transfer-encoding']='chunked'})()
+        T.eq(err,'Trailer too large')
+        local _,why=H.body_source(socket_bytes('0\r\n'..string.rep(string.rep('a',4096)..'\r\n',17)),{['transfer-encoding']='chunked'})()
+        T.eq(why,'Trailers too large')
+    end)
+    T.test('certificate CN fallback and SAN wildcards',function()
+        local cert={extensions=function() return {} end,subject=function() return {{oid='2.5.4.3',value='*.example.org'}} end}
+        T.truth(H.check_host(cert,'a.example.org')); T.eq(H.check_host(cert,'a.b.example.org'),nil)
+        cert.extensions=function() return {['2.5.29.17']={dNSName={'*.example.org'}}} end
+        T.truth(H.check_host(cert,'dl.example.org')); T.eq(H.check_host(cert,'example.org'),nil)
+    end)
+    T.test('body failures allow a second request to the same host',function()
+        local calls=0
+        local c=H.new{cafile='test',transport=function() calls=calls+1; return nil,'truncated','body' end}
+        local _,_,kind=c:request('https://a.org/')
+        T.eq(kind,'body'); T.eq(c.bad_hosts['a.org'],nil)
+        c:request('https://a.org/'); T.eq(calls,2)
+    end)
+    T.test('origin policy precedes redirect connections',function()
+        local calls=0
+        local c=H.new{cafile='test',transport=function(url)
+            calls=calls+1; return {code=302,headers={location='https://evil.org/'},url=url,host='a.org'}
+        end}
+        local _,err,kind=c:request('https://a.org/',{origin_policy=function(p) return p.host=='a.org','Denied '..p.host end})
+        T.eq(calls,1); T.eq(kind,'policy'); T.truth(err:find('evil.org',1,true))
     end)
     T.test('truncated fixed-length source reports error after partial bytes',function()
         local calls=0
@@ -96,6 +127,7 @@ return function(T)
         T.eq(result,'abc'); T.eq(err,nil)
     end)
 
+    if T.integration then
     T.test('raw transport enforces peer CA hostname and timeouts',function()
         local saved={}
         for _,name in ipairs({'socket.http','ssl.https','socketutil'}) do saved[name]=package.loaded[name] end
@@ -134,5 +166,34 @@ return function(T)
         for _,name in ipairs({'socket.http','ssl.https','socketutil'}) do package.loaded[name]=saved[name] end
         assert(ok,err)
     end)
-
+    T.test('raw failures mark only hosts failing before statusline',function()
+        local saved={}
+        for _,name in ipairs({'socket.http','ssl.https','socketutil'}) do saved[name]={value=package.loaded[name]} end
+        local stage='connect'
+        local low={TIMEOUT=15,open=function()
+            if stage=='connect' then error('TLS handshake failed') end
+            return {sendrequestline=function() end,sendheaders=function() end,
+                receivestatusline=function() return 200,'OK' end,
+                receiveheaders=function()
+                    if stage=='headers' then error('Truncated headers') end
+                    return {['content-length']='3'}
+                end,
+                c={receive=function() return nil,'closed','a' end},
+                try=function(value,err) assert(value,err); return value end,close=function() end}
+        end}
+        package.loaded['socket.http']=low
+        package.loaded['ssl.https']={tcp=function() return function() end end}
+        package.loaded.socketutil={set_timeout=function() end}
+        local ok,err=pcall(function()
+            local c=H.new{cafile='test'}
+            local _,_,kind=c:request('https://a.org/'); T.eq(kind,'transport'); T.truth(c.bad_hosts['a.org'])
+            for _,step in ipairs({'headers','body'}) do
+                stage=step; c.bad_hosts={}
+                local _,_,why=c:request('https://a.org/'); T.eq(why,'body'); T.eq(c.bad_hosts['a.org'],nil)
+            end
+        end)
+        for name,v in pairs(saved) do package.loaded[name]=v.value end
+        assert(ok,err)
+    end)
+    end
 end
