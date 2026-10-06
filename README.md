@@ -19,11 +19,11 @@ Enter a title, author, or ISBN. The format filter accepts blank/any, epub, pdf, 
 
 Tap a book for details, then **Download** for Anna's Archive fast downloads or **Try LibGen** for the fallback. The progress dialog shows the phase, host, received bytes, total when known, and average transfer speed. **Cancel** terminates the worker and keeps a partial file. **Discard partial** terminates it and removes that operation's partial file and ownership sidecar. After successful verification the file manager refreshes and you can choose **Open now**.
 
-Fast downloads require an Anna's Archive membership with available daily downloads. Book Fetch exchanges the secret key for an in-memory login session, then requests the fast-download API. It displays quota fields returned by the API after a successful download. Partner failures can require additional API calls and may consume additional quota; the plugin tries domain indices 0 through 6 and stops on an API error. Quota rules and API fields are controlled by Anna's Archive, so check your account for authoritative details.
+Fast downloads require an Anna's Archive membership with available daily downloads. Book Fetch exchanges the secret key for an in-memory login session, then requests the fast-download API. It displays quota fields returned by the API after a successful download. Partner failures can require additional API calls and may consume additional quota; the plugin tries domain indices 0 through 6 and stops on a terminal account/quota/domain error. Temporary API errors continue to the next index. Disk, size-limit, integrity, and policy failures stop without requesting another partner URL. Quota rules and API fields are controlled by Anna's Archive, so check your account for authoritative details.
 
-LibGen does not require your Anna's Archive key. The plugin fetches `ads.php` for the selected MD5, resolves an allowlisted `get.php` link, and follows verified HTTPS download redirects. Metadata and the expected MD5 remain those of the selected book. If that exact file is unavailable, it reports an error.
+LibGen does not require your Anna's Archive key. The plugin fetches `ads.php` for the selected MD5, resolves an allowlisted `get.php` link, and checks every verified HTTPS redirect against the allowlist before connecting. Listed hosts and their subdomains are allowed. Metadata and the expected MD5 remain those of the selected book. If that exact file is unavailable, it reports an error.
 
-DDoS-Guard challenges and access denials are reported. An expired/blocked authenticated request triggers at most one login retry for that mirror, then the next configured mirror is tried. There is no challenge solver or slow-download countdown support.
+DDoS-Guard challenges and access denials are reported. A blocked authenticated request moves directly to the next configured mirror without another login POST. A DDoS-Guard cookie by itself does not block a successful search response. There is no challenge solver or slow-download countdown support.
 
 ## Settings
 
@@ -46,17 +46,17 @@ A download has `<filename>.part` and `<filename>.part.md5`. The sidecar associat
 
 The limit is **500,000,000 bytes**. Free space is checked through KOReader's statvfs wrapper when available, including when the server provides the total size; older builds without that wrapper skip the check and still report write errors. The plugin checks the file signature and rejects HTML, then computes a streaming MD5 over the entire file. It checks for KOReader's `ffi/sha2.md5` streaming API first and uses the included RFC 1321 implementation when unavailable. Signature/hash failures are preserved as `.bad` (with a suffix if necessary). They never become books. A verified partial is atomically renamed in the same directory. MD5 identifies the catalog file; it is not a malware or authenticity guarantee.
 
-Supported signatures: epub/cbz/docx (ZIP), pdf, mobi/azw/azw3, djvu, fb2 (XML), and plain text. Missing or unsupported result formats are reported instead of guessed. ZIP-based signatures do not inspect archive contents. Covers, conversion, self-update, slow downloads, and Z-Library are out of scope.
+Supported signatures: epub/cbz/docx (ZIP), pdf, mobi/azw/azw3, djvu, fb2 (XML), and plain text. When a result has no format, Book Fetch identifies it from the downloaded signature and Content-Type before choosing its extension; unrecognized content is quarantined. Unsupported declared formats are reported. ZIP-based signatures do not inspect archive contents. Covers, conversion, self-update, slow downloads, and Z-Library are out of scope.
 
 ## Firewall and privacy
 
-Fast-download partner domains rotate and may live in different countries. DNS, GeoIP rules, or firewall policy can block a partner even when the search mirror works. Failures identify the host and reason. Book Fetch tries alternatives, then remembers failed network hosts for 24 hours. Clear the bad-host list after correcting a firewall rule; enabling broader access is your decision.
+Fast-download partner domains rotate and may live in different countries. DNS, GeoIP rules, or firewall policy can block a partner even when the search mirror works. Failures identify the host and reason. Book Fetch tries alternatives, then remembers hosts with connection/TLS failures for 24 hours. A truncated body does not blacklist the host, so its partial can still resume. Clear the bad-host list after correcting a firewall rule; enabling broader access is your decision.
 
 Your configured mirrors receive your IP address, browser-style User-Agent, search terms, filters, page numbers, and selected book MD5s. Anna's Archive receives your secret key over verified HTTPS for login/API requests and may return an account session cookie. Download partners receive the selected URL, IP address, and range request; account cookies are removed on cross-origin redirects. LibGen receives the selected MD5 and its own link token. Book Fetch has no telemetry, covers, automatic discovery, or startup network traffic.
 
-## Device-only tests
+## Tests
 
-The plain-Lua suite uses synthetic HTML fixtures and mocked transports, with no external requests. Download tests use a disposable temporary directory. UI tests stub widgets and the scheduler, so they do not start a second KOReader UI. Run on the Kobo's LuaJIT, with the existing KOReader directory as the working directory for library/CA lookup. `setupkoenv` only configures module/library paths.
+`spec/run.lua` runs pure logic under plain LuaJIT without KOReader setup. `spec/run_ko.lua` runs integration checks from the KOReader directory, including runtime APIs, adapters, downloads, and UI callbacks. Both use synthetic HTML fixtures and mocked transports, with no external requests. Download tests use a disposable temporary directory. UI tests stub widgets and the scheduler, so they do not start a second KOReader UI. Run on the Kobo's LuaJIT, with the existing KOReader directory as the working directory for library/CA lookup. `setupkoenv` only configures module/library paths.
 
 From the workstation, copy only the test payload into `/tmp/bookfetch-test` on the Kobo:
 
@@ -64,7 +64,7 @@ From the workstation, copy only the test payload into `/tmp/bookfetch-test` on t
 ssh kobo 'mkdir -p /tmp/bookfetch-test'
 scp -r main.lua _meta.lua bookfetch spec kobo:/tmp/bookfetch-test/
 ssh kobo 'cd /mnt/onboard/.adds/koreader && ./luajit /tmp/bookfetch-test/spec/probe.lua'
-ssh kobo 'cd /mnt/onboard/.adds/koreader && ./luajit /tmp/bookfetch-test/spec/run.lua'
+ssh kobo 'cd /mnt/onboard/.adds/koreader && ./luajit /tmp/bookfetch-test/spec/run.lua && ./luajit /tmp/bookfetch-test/spec/run_ko.lua'
 ssh kobo 'cd /mnt/onboard/.adds/koreader && ./luajit /tmp/bookfetch-test/spec/syntax.lua /tmp/bookfetch-test'
 ```
 

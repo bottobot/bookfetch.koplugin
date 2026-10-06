@@ -13,6 +13,9 @@ function BookFetch:onBookFetchSearch()
     self.bookfetch_ui:search_dialog()
     return true
 end
+function BookFetch:onCloseWidget()
+    if self.bookfetch_ui then self.bookfetch_ui:teardown() end
+end
 function BookFetch:addToMainMenu(menu_items)
     menu_items.bookfetch={text='Book Fetch',sorting_hint='tools',sub_item_table={
         {text='Search',callback=function() self:onBookFetchSearch() end},
