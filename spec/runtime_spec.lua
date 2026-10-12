@@ -8,14 +8,15 @@ return function(T)
     end)
     T.test('runtime ButtonDialog supports region-only title rebuild',function()
         local ok,dialog=pcall(require,'ui/widget/buttondialog')
-        if not ok or type(dialog)~='table' then return end  -- KOReader not fully initialized
+        if not ok or type(dialog)~='table' then T.skip('ButtonDialog could not load: '..tostring(dialog)) end
         T.eq(type(dialog.setTitle),'function'); T.eq(type(dialog.reinit),'function')
         local ok2,uimgr=pcall(require,'ui/uimanager')
-        if ok2 then T.eq(type(uimgr.setDirty),'function') end
+        if not ok2 then T.skip('UIManager could not load: '..tostring(uimgr)) end
+        T.eq(type(uimgr.setDirty),'function')
     end)
     T.test('runtime Trapper reports false when fork cannot start',function()
         local ok,trap=pcall(require,'ui/trapper')
-        if not ok or type(trap)~='table' then return end  -- Module requires complete KOReader environment
+        if not ok or type(trap)~='table' then T.skip('Trapper could not load: '..tostring(trap)) end
         local util=require('ffi/util')
         local fork=util.runInSubProcess
         util.runInSubProcess=function() return false,'simulated fork failure' end

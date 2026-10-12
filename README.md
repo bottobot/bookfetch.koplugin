@@ -1,17 +1,22 @@
 # Book Fetch for KOReader
 
-Book Fetch 0.1.0 searches Anna's Archive and downloads books directly to a Kobo. It targets the Kobo Libra Colour with KOReader v2026.07.1. Use it for public-domain, openly licensed, or owner-entitled material.
+Book Fetch 0.1.0 searches Anna's Archive and downloads books directly to a Kobo. Its development target is the Kobo Libra Colour with KOReader v2026.07.1. Use it for public-domain, openly licensed, or owner-entitled material.
+
+This is an early release. Automated tests cover local logic, mocked transports, and selected KOReader APIs; they do not establish that current mirrors, membership login, or physical-device UI behavior work. See [Tests](#tests) and the [release checklist](docs/RELEASING.md) before distributing a build. Other devices and KOReader versions are not established compatibility targets.
 
 Search and download work runs in a cancellable KOReader subprocess. Downloads stream to disk, resume when the server supports ranges, and become visible as books only after signature and MD5 verification. The plugin makes no network requests at startup.
 
 ## Install
 
-1. Copy this directory, named **bookfetch.koplugin**, into KOReader's `plugins` directory. On a typical Kobo installation that is `/mnt/onboard/.adds/koreader/plugins/bookfetch.koplugin`.
-2. Restart KOReader when convenient.
-3. Open **Tools → Book Fetch → Settings** and enter your Anna's Archive membership secret key.
-4. Open **Tools → Book Fetch → Search**. The **Book Fetch** dispatcher action can also be assigned to a gesture.
+1. Install KOReader first. Use a trusted source checkout or a release archive with a **bookfetch.koplugin** directory; rename a GitHub source ZIP's extracted directory if it has a branch or version suffix.
+2. Copy **bookfetch.koplugin** into KOReader's `plugins` directory. On a typical Kobo installation that is `/mnt/onboard/.adds/koreader/plugins/bookfetch.koplugin`. Its top level must contain `main.lua`, `_meta.lua`, and `bookfetch/`, without an extra nested directory.
+3. Restart KOReader when convenient.
+4. Open **Tools → Book Fetch → Settings** and enter your Anna's Archive membership secret key.
+5. Open **Tools → Book Fetch → Search**. The **Book Fetch** dispatcher action can also be assigned to a gesture.
 
-Do not copy `.git`, temporary test files, or downloaded books. This implementation task does not install into, modify, or restart the existing KOReader installation.
+Do not copy `.git`, temporary test files, settings, credentials, or downloaded books. The runtime files are `main.lua`, `_meta.lua`, and `bookfetch/`; retain the supplied license when redistributing. KOReader supplies LuaJIT and the runtime libraries, so no separate package installation is required on the Kobo.
+
+Before upgrading, keep a private backup of the old plugin directory and `settings/bookfetch.lua`. Replace the plugin directory while KOReader is stopped, retaining your settings separately. To uninstall, stop KOReader and remove `plugins/bookfetch.koplugin`; downloaded books and the separate settings file remain. Delete `settings/bookfetch.lua` separately if you also want to remove the saved membership key.
 
 ## Search and download
 
@@ -56,19 +61,33 @@ Your configured mirrors receive your IP address, browser-style User-Agent, searc
 
 ## Tests
 
-`spec/run.lua` runs pure logic under plain LuaJIT without KOReader setup. `spec/run_ko.lua` runs integration checks from the KOReader directory, including runtime APIs, adapters, downloads, and UI callbacks. Both use synthetic HTML fixtures and mocked transports, with no external requests. Download tests use a disposable temporary directory. UI tests stub widgets and the scheduler, so they do not start a second KOReader UI. Run on the Kobo's LuaJIT, with the existing KOReader directory as the working directory for library/CA lookup. `setupkoenv` only configures module/library paths.
-
-From the workstation, copy only the test payload into `/tmp/bookfetch-test` on the Kobo:
+Run the pure logic suite from this repository with LuaJIT (Lua alone is insufficient because the MD5 implementation uses LuaJIT's `bit` module):
 
 ```sh
-ssh kobo 'mkdir -p /tmp/bookfetch-test'
-scp -r main.lua _meta.lua bookfetch spec kobo:/tmp/bookfetch-test/
-ssh kobo 'cd /mnt/onboard/.adds/koreader && ./luajit /tmp/bookfetch-test/spec/probe.lua'
-ssh kobo 'cd /mnt/onboard/.adds/koreader && ./luajit /tmp/bookfetch-test/spec/run.lua && ./luajit /tmp/bookfetch-test/spec/run_ko.lua'
-ssh kobo 'cd /mnt/onboard/.adds/koreader && ./luajit /tmp/bookfetch-test/spec/syntax.lua /tmp/bookfetch-test'
+luajit spec/run.lua
 ```
 
-Some workstation OpenSSH configurations have an unreadable system include. If that occurs, use `ssh -F /home/robert/.ssh/config kobo` and the corresponding `scp -F` option, retaining the owner's host and identity settings.
+For the integration and syntax suites, use an existing KOReader runtime built for the machine running the tests. It must include `luajit`, `setupkoenv.lua`, `frontend/`, `common/`, `libs/`, and the CA bundle. An ARM Kobo runtime cannot be executed directly on an x86 workstation. Set these absolute paths for your own checkout and runtime:
+
+```sh
+BOOKFETCH_ROOT='/absolute/path/to/bookfetch.koplugin'
+KOREADER_ROOT='/absolute/path/to/koreader'
+cd "$KOREADER_ROOT"
+./luajit "$BOOKFETCH_ROOT/spec/probe.lua"
+./luajit "$BOOKFETCH_ROOT/spec/run.lua"
+./luajit "$BOOKFETCH_ROOT/spec/run_ko.lua"
+./luajit "$BOOKFETCH_ROOT/spec/syntax.lua" "$BOOKFETCH_ROOT"
+```
+
+`spec/run_ko.lua` uses synthetic HTML, mocked transports, disposable temporary files, and stubbed UI callbacks. It makes no external requests and does not start a second KOReader UI. Run it in an isolated test environment with the source and runtime read-only, no network or credentials, and a writable temporary directory. Do not run it against a live reading session as a substitute for an isolated test setup.
+
+The summary separates **passed**, **failed**, and **skipped** checks. Some native UI/Trapper checks need KOReader global initialization that `setupkoenv` does not perform. A standalone runtime may therefore skip them; each skip prints the missing module and reason. A skip is not compatibility evidence. To require every check to execute, use:
+
+```sh
+BOOKFETCH_REQUIRE_RUNTIME=1 ./luajit "$BOOKFETCH_ROOT/spec/run_ko.lua"
+```
+
+This mode turns skipped checks into failures and exits unsuccessfully until the required runtime is initialized. It does not initialize KOReader for you. Even a run without skips uses mocks for network transport, widgets, scheduling, and subprocess callbacks; it is not a physical acceptance test.
 
 The tests cover names/UTF-8/collisions, RFC 1321 MD5 vectors, realistic parsing, signatures, URL encoding/redaction, TLS hostname rules, redirect/cookie isolation, bad-host expiry, adapters, streamed resume/restart, limits, corrupt-file preservation, and subprocess/online gating. They do not prove live mirror availability, account login/quota, actual TLS handshakes, physical cancellation, or e-ink rendering. Those require an explicit authorized smoke test on the device.
 
