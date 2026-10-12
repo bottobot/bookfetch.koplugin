@@ -2,7 +2,7 @@
 
 Book Fetch 0.1.0 searches Anna's Archive and downloads books directly to a Kobo. Its development target is the Kobo Libra Colour with KOReader v2026.07.1. Use it for public-domain, openly licensed, or owner-entitled material.
 
-This is an early release. Automated tests cover local logic, mocked transports, and selected KOReader APIs; they do not establish that current mirrors, membership login, or physical-device UI behavior work. See [Tests](#tests) and the [release checklist](docs/RELEASING.md) before distributing a build. Other devices and KOReader versions are not established compatibility targets.
+**Status: experimental.** Automated tests cover local logic, mocked transports, and selected KOReader APIs; they do not establish that current mirrors, membership login, or physical-device UI behavior work. See [Tests](#tests) and the [release checklist](docs/RELEASING.md) before distributing a build. Other devices and KOReader versions are not established compatibility targets.
 
 Search and download work runs in a cancellable KOReader subprocess. Downloads stream to disk, resume when the server supports ranges, and become visible as books only after signature and MD5 verification. The plugin makes no network requests at startup.
 
