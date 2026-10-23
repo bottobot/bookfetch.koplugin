@@ -193,6 +193,29 @@ function M.libgen(html, expected)
     end
     return nil,'No LibGen download link found'
 end
+-- LibGen index.php result rows: title | author | publisher | year | language | pages | size | ext | mirrors.
+function M.libgen_search(html)
+    local function clean(s) return (M.text((s:gsub('<[^>]*>',' '))):gsub('%s+',' '):gsub('^ ',''):gsub(' $','')) end
+    local books={}
+    for row in html:gmatch('<tr[^>]*>(.-)</tr>') do
+        local md5=row:match('ads%.php%?md5=(%x+)')
+        if M.is_md5(md5) then
+            local cells={}
+            for cell in row:gmatch('<td[^>]*>(.-)</td>') do cells[#cells+1]=cell end
+            -- The title is the first edition link's text; the cell also holds ISBN lines and badges.
+            local title=clean((cells[1] or ''):match('href="edition%.php[^"]*"[^>]*>(.-)</a>') or cells[1] or '')
+            local book={md5=md5:lower(),title=title,author=clean(cells[2] or '')}
+            local publisher,year,language,size,format=clean(cells[3] or ''),clean(cells[4] or ''),clean(cells[5] or ''),clean(cells[7] or ''),clean(cells[8] or '')
+            if publisher~='' then book.publisher=publisher end
+            if year:match('^%d%d%d%d$') then book.year=year end
+            if language~='' then book.language=language end
+            if size~='' then book.size=size end
+            if format:match('^%w+$') then book.format=format:lower() end
+            books[#books+1]=book
+        end
+    end
+    return books
+end
 function M.blocked(code,headers,body)
     local loc=(headers or {}).location or ''
     local h=(body or ''):lower()

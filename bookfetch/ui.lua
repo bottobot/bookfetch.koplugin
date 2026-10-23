@@ -204,8 +204,11 @@ function M:search_dialog()
     self:show(dialog); dialog:onShowKeyboard()
 end
 function M:search(query,format,language,page)
-    self:work('Searching Anna\'s Archive',function(_,aa)
-        return aa:search(query,format,language,page)
+    self:work('Searching',function(_,aa,lg)
+        local data,err,kind=aa:search(query,format,language,page)
+        -- Anna's Archive search sits behind a JavaScript challenge since 2026-10; LibGen search is open.
+        if not data and tostring(err):find('DDoS-Guard',1,true) then return lg:search(query,format,language,page) end
+        return data,err,kind
     end,function(data) self:results(data,query,format,language) end)
 end
 function M:results(data,query,format,language)

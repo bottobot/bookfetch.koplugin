@@ -17,6 +17,30 @@ function LG:policy()
         return nil,'LibGen host is not allowlisted: '..parsed.host
     end
 end
+-- Search LibGen (title column, files, libgen topic). Used when Anna's Archive search is behind
+-- its JavaScript challenge; downloads still go through the members' API by MD5.
+-- shortcut: language is not filtered (LibGen uses names, Anna's uses codes); add a map when it matters.
+function LG:search(query,format,language,page)
+    page=page or 1
+    local policy=self:policy()
+    local errors={}
+    local path='/index.php?req='..Http.encode(query)..'&columns%5B%5D=t&objects%5B%5D=f&topics%5B%5D=l&res=25&page='..page
+    for _,base in ipairs(self.settings.libgen_mirrors) do
+        local res,err=self.http:request(base..path,{origin_policy=policy,inspect=function(r)
+            if Parse.blocked(r.code,r.headers,r.body) then return nil,'Blocked by DDoS-Guard on '..r.host end
+            return true
+        end})
+        if res and res.code==200 then
+            local books={}
+            for _,book in ipairs(Parse.libgen_search(res.body or '')) do
+                if format=='' or (book.format or '')==format:lower() then books[#books+1]=book end
+            end
+            return {books=books,page=page,source='libgen'}
+        end
+        errors[#errors+1]=err or ('HTTP '..res.code..' on '..res.host)
+    end
+    return nil,table.concat(errors,'\n')
+end
 function LG:resolve(book,base)
     if not Parse.is_md5(book.md5) then return nil,'Invalid book MD5' end
     local policy=self:policy()
