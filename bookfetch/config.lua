@@ -4,7 +4,7 @@ local DataStorage=require('datastorage')
 local lfs=require('libs/libkoreader-lfs')
 local Http=require('bookfetch.http')
 local M={}
-local defaults={key='',mirrors={'https://annas-archive.pk'},libgen_mirrors={
+local defaults={key='',mirrors={'https://annas-archive.pk','https://annas-archive.gl','https://annas-archive.gd'},libgen_mirrors={
     'https://libgen.li','https://libgen.gl','https://libgen.la','https://libgen.vg','https://libgen.bz'},
     download_folder='/mnt/onboard/Books',preferred_format='',bad_hosts={}}
 local function copy(value)
